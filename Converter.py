@@ -156,14 +156,28 @@ run;
 """
         return sas_code
     
-    def convert_h5_to_7bdat(self, h5_path, output_path=None, dataset_name=None):
+    def list_datasets(self, h5_path):
+        """List all datasets in an H5 file."""
+        datasets = []
+        try:
+            with h5py.File(h5_path, 'r') as f:
+                def collect_datasets(name, obj):
+                    if isinstance(obj, h5py.Dataset):
+                        datasets.append(name)
+                f.visititems(collect_datasets)
+        except Exception as e:
+            logger.error(f"Error listing datasets: {e}")
+        return datasets
+    
+    def convert_h5_to_7bdat(self, h5_path, output_path=None, dataset_name=None, convert_all=False):
         """
         Convert H5 file to 7BDAT format.
         
         Args:
             h5_path (str): Path to input H5 file
             output_path (str): Path for output 7BDAT file (optional)
-            dataset_name (str): Specific dataset to convert (optional, converts first dataset if not specified)
+            dataset_name (str): Specific dataset to convert (optional)
+            convert_all (bool): Convert all datasets if no specific dataset is given
         """
         h5_path = Path(h5_path)
         
@@ -194,8 +208,9 @@ run;
                     logger.error("No datasets found in H5 file")
                     return False
                 
-                # Select dataset to convert
+                # Select dataset(s) to convert
                 if dataset_name:
+                    # Convert specific dataset
                     selected_dataset = None
                     for name, dataset in datasets:
                         if name == dataset_name or name.endswith(f"/{dataset_name}"):
@@ -207,93 +222,128 @@ run;
                         logger.info(f"Available datasets: {[name for name, _ in datasets]}")
                         return False
                     
-                    datasets = [selected_dataset]
+                    datasets_to_convert = [selected_dataset]
                 else:
-                    # Use the first dataset if none specified
-                    datasets = [datasets[0]]
-                    logger.info(f"No dataset specified, using: {datasets[0][0]}")
-                
-                # Convert the selected dataset
-                name, dataset = datasets[0]
-                df = self.convert_h5_dataset_to_dataframe(dataset, name.split('/')[-1])
-                
-                if df is None:
-                    return False
-                
-                logger.info(f"Converted dataset shape: {df.shape}")
-                logger.info(f"Columns: {list(df.columns)}")
-                logger.info(f"Data types: {df.dtypes.to_dict()}")
-                
-                # Save as SAS 7BDAT file - try multiple approaches
-                saved_successfully = False
-                
-                # Method 1: Try pyreadstat with SAS XPORT format (compatible with SAS)
-                try:
-                    import pyreadstat
-                    # pyreadstat doesn't have write_sas7bdat, but has write_xport for SAS XPORT format
-                    xport_path = output_path.with_suffix('.xpt')
-                    pyreadstat.write_xport(df, str(xport_path), table_name='DATA')
-                    logger.info(f"Successfully saved using pyreadstat (XPORT format) to: {xport_path}")
-                    saved_successfully = True
+                    # No dataset specified - identify all datasets and convert each
+                    logger.info(f"No dataset specified. Found {len(datasets)} dataset(s) in H5 file:")
+                    for name, _ in datasets:
+                        logger.info(f"  - {name}")
                     
-                except ImportError:
-                    logger.warning("pyreadstat not available. Install with: pip install pyreadstat")
-                    
-                except Exception as e:
-                    logger.warning(f"Error with pyreadstat XPORT: {e}")
+                    # Convert all datasets
+                    datasets_to_convert = datasets
+                    logger.info(f"Converting all {len(datasets_to_convert)} dataset(s)...")
                 
-                # Method 2: Try pandas SAS writer (if available)
-                if not saved_successfully:
+                # Convert each selected dataset
+                all_successful = True
+                for idx, (name, dataset) in enumerate(datasets_to_convert):
+                    logger.info(f"\nConverting dataset {idx+1}/{len(datasets_to_convert)}: {name}")
+                    
+                    # Generate unique output path for each dataset
+                    if len(datasets_to_convert) > 1:
+                        # Clean dataset name for filename
+                        clean_name = name.replace('/', '_').strip('_')
+                        if output_path.suffix:
+                            dataset_output_path = output_path.parent / f"{output_path.stem}_{clean_name}{output_path.suffix}"
+                        else:
+                            dataset_output_path = output_path.parent / f"{output_path.name}_{clean_name}.sas7bdat"
+                    else:
+                        dataset_output_path = output_path
+                    
+                    df = self.convert_h5_dataset_to_dataframe(dataset, name.split('/')[-1])
+                
+                    if df is None:
+                        logger.error(f"Failed to convert dataset: {name}")
+                        all_successful = False
+                        continue
+                    
+                    logger.info(f"  Dataset shape: {df.shape}")
+                    logger.info(f"  Columns: {list(df.columns)}")
+                    logger.info(f"  Data types: {df.dtypes.to_dict()}")
+                    
+                    # Save as SAS 7BDAT file - try multiple approaches
+                    saved_successfully = False
+                    
+                    # Method 1: Try pyreadstat with SAS XPORT format (compatible with SAS)
                     try:
-                        # Some pandas versions have SAS writer
-                        df.to_sas(str(output_path))
-                        logger.info(f"Successfully saved using pandas to: {output_path}")
+                        import pyreadstat
+                        # pyreadstat doesn't have write_sas7bdat, but has write_xport for SAS XPORT format
+                        xport_path = dataset_output_path.with_suffix('.xpt')
+                        pyreadstat.write_xport(df, str(xport_path), table_name='DATA')
+                        logger.info(f"  Successfully saved using pyreadstat (XPORT format) to: {xport_path}")
                         saved_successfully = True
                         
-                    except AttributeError:
-                        logger.warning("pandas SAS writer not available in this version")
+                    except ImportError:
+                        if idx == 0:  # Only warn once
+                            logger.warning("pyreadstat not available. Install with: pip install pyreadstat")
                         
                     except Exception as e:
-                        logger.warning(f"Error with pandas SAS writer: {e}")
-                
-                # Method 3: Try alternative SAS libraries
-                if not saved_successfully:
-                    try:
-                        import sas7bdat
-                        # This is typically for reading, but let's try
-                        logger.warning("sas7bdat library found but typically used for reading only")
+                        logger.warning(f"  Error with pyreadstat XPORT: {e}")
+                    
+                    # Method 2: Try pandas SAS writer (if available)
+                    if not saved_successfully:
+                        try:
+                            # Some pandas versions have SAS writer
+                            df.to_sas(str(dataset_output_path))
+                            logger.info(f"  Successfully saved using pandas to: {dataset_output_path}")
+                            saved_successfully = True
+                            
+                        except AttributeError:
+                            if idx == 0:  # Only warn once
+                                logger.warning("pandas SAS writer not available in this version")
+                            
+                        except Exception as e:
+                            logger.warning(f"  Error with pandas SAS writer: {e}")
+                    
+                    # Method 3: Try alternative SAS libraries
+                    if not saved_successfully:
+                        try:
+                            import sas7bdat
+                            # This is typically for reading, but let's try
+                            if idx == 0:  # Only warn once
+                                logger.warning("sas7bdat library found but typically used for reading only")
+                            
+                        except ImportError:
+                            pass
+                    
+                    # Method 4: Save as CSV with SAS-compatible format
+                    if not saved_successfully:
+                        logger.info("  SAS format not available, saving as CSV with SAS-compatible formatting...")
+                        csv_path = dataset_output_path.with_suffix('.csv')
                         
-                    except ImportError:
-                        pass
+                        # Ensure column names are SAS-compatible (max 32 chars, no special chars)
+                        df_sas_compatible = df.copy()
+                        new_columns = {}
+                        for col in df_sas_compatible.columns:
+                            # Make column names SAS-compatible
+                            new_col = str(col).replace(' ', '_').replace('-', '_')
+                            new_col = ''.join(c for c in new_col if c.isalnum() or c == '_')
+                            new_col = new_col[:32]  # SAS max column name length
+                            new_columns[col] = new_col
+                        
+                        df_sas_compatible.rename(columns=new_columns, inplace=True)
+                        df_sas_compatible.to_csv(csv_path, index=False)
+                        logger.info(f"  Saved as SAS-compatible CSV: {csv_path}")
+                        
+                        # Also create a SAS import script
+                        sas_script_path = dataset_output_path.with_suffix('.sas')
+                        sas_import_code = self.generate_sas_import_script(csv_path, df_sas_compatible)
+                        with open(sas_script_path, 'w') as f:
+                            f.write(sas_import_code)
+                        logger.info(f"  Created SAS import script: {sas_script_path}")
+                        saved_successfully = True
+                    
+                    if not saved_successfully:
+                        all_successful = False
+                        logger.error(f"  Failed to save dataset: {name}")
                 
-                # Method 4: Save as CSV with SAS-compatible format
-                if not saved_successfully:
-                    logger.info("SAS format not available, saving as CSV with SAS-compatible formatting...")
-                    csv_path = output_path.with_suffix('.csv')
-                    
-                    # Ensure column names are SAS-compatible (max 32 chars, no special chars)
-                    df_sas_compatible = df.copy()
-                    new_columns = {}
-                    for col in df_sas_compatible.columns:
-                        # Make column names SAS-compatible
-                        new_col = str(col).replace(' ', '_').replace('-', '_')
-                        new_col = ''.join(c for c in new_col if c.isalnum() or c == '_')
-                        new_col = new_col[:32]  # SAS max column name length
-                        new_columns[col] = new_col
-                    
-                    df_sas_compatible.rename(columns=new_columns, inplace=True)
-                    df_sas_compatible.to_csv(csv_path, index=False)
-                    logger.info(f"Saved as SAS-compatible CSV: {csv_path}")
-                    
-                    # Also create a SAS import script
-                    sas_script_path = output_path.with_suffix('.sas')
-                    sas_import_code = self.generate_sas_import_script(csv_path, df_sas_compatible)
-                    with open(sas_script_path, 'w') as f:
-                        f.write(sas_import_code)
-                    logger.info(f"Created SAS import script: {sas_script_path}")
-                    saved_successfully = True
+                if len(datasets_to_convert) > 1:
+                    logger.info(f"\nCompleted conversion of {len(datasets_to_convert)} dataset(s)")
+                    if all_successful:
+                        logger.info("All datasets converted successfully")
+                    else:
+                        logger.warning("Some datasets failed to convert")
                 
-                return saved_successfully
+                return all_successful
                 
         except Exception as e:
             logger.error(f"Error processing H5 file: {e}")
@@ -334,6 +384,7 @@ def main():
     parser.add_argument('-d', '--dataset', help='Specific dataset name to convert')
     parser.add_argument('-i', '--inspect', action='store_true', help='Inspect H5 file structure only')
     parser.add_argument('-b', '--batch', action='store_true', help='Batch convert all H5 files in directory')
+    parser.add_argument('-l', '--list', action='store_true', help='List all datasets in H5 file')
     parser.add_argument('--pattern', default='*.h5', help='File pattern for batch conversion (default: *.h5)')
     
     args = parser.parse_args()
@@ -342,10 +393,19 @@ def main():
     
     if args.inspect:
         converter.inspect_h5_file(args.input)
+    elif args.list:
+        datasets = converter.list_datasets(args.input)
+        if datasets:
+            print(f"\nDatasets found in {args.input}:")
+            for dataset in datasets:
+                print(f"  - {dataset}")
+        else:
+            print(f"No datasets found in {args.input}")
     elif args.batch:
         converter.batch_convert(args.input, args.output, args.pattern)
     else:
-        converter.convert_h5_to_7bdat(args.input, args.output, args.dataset)
+        # Convert with automatic dataset detection if none specified
+        converter.convert_h5_to_7bdat(args.input, args.output, args.dataset, convert_all=True)
 
 
 if __name__ == "__main__":
@@ -360,11 +420,20 @@ if __name__ == "__main__":
                 print(f"{i+1}. {h5_file}")
             
             # Convert the first one as an example
-            print(f"\nInspecting and converting: {h5_files[0]}")
+            print(f"\nInspecting: {h5_files[0]}")
             converter.inspect_h5_file(h5_files[0])
-            converter.convert_h5_to_7bdat(h5_files[0])
+            
+            # List datasets
+            datasets = converter.list_datasets(h5_files[0])
+            if datasets:
+                print(f"\nFound {len(datasets)} dataset(s). Converting all...")
+                converter.convert_h5_to_7bdat(h5_files[0], convert_all=True)
+            else:
+                print("No datasets found to convert.")
         else:
             print("No H5 files found in current directory.")
             print("Usage: python Converter.py <input.h5> [-o output.sas7bdat] [-d dataset_name]")
+            print("       python Converter.py <input.h5> -l  # List all datasets")
+            print("       python Converter.py <input.h5>     # Convert all datasets automatically")
     else:
         main()

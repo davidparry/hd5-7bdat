@@ -4,9 +4,11 @@ This tool converts HDF5 (.h5) files to SAS-compatible formats, preserving data s
 
 ## Features
 
+- **NEW: Automatic multi-dataset conversion** - Converts all datasets when none specified
 - Convert single H5 files to SAS XPORT format (.xpt)
 - Batch convert multiple H5 files in a directory
 - Inspect H5 file structure before conversion
+- List all datasets in an H5 file
 - Handle various data types and shapes (1D, 2D, multi-dimensional arrays)
 - Multiple output formats with automatic fallback
 - Automatic SAS-compatible column naming
@@ -101,13 +103,27 @@ Convert the sample H5 file to SAS format:
 python3 Converter.py PatientData_1755638164371998322.h5
 ```
 
-**Expected output:**
+**Expected output (NEW - converts all datasets):**
 ```
 2025-08-25 16:57:10,842 - INFO - Converting PatientData_1755638164371998322.h5 to PatientData_1755638164371998322.sas7bdat
-2025-08-25 16:57:10,849 - INFO - No dataset specified, using: Trends/ART_Dias
-2025-08-25 16:57:10,857 - INFO - Converted dataset shape: (268584, 1)
-2025-08-25 16:57:10,857 - INFO - Columns: ['ART_Dias']
-2025-08-25 16:57:11,258 - INFO - Successfully saved using pyreadstat (XPORT format) to: PatientData_1755638164371998322.xpt
+2025-08-25 16:57:10,849 - INFO - No dataset specified. Found 15 dataset(s) in H5 file:
+2025-08-25 16:57:10,849 - INFO -   - Trends/ART_Dias
+2025-08-25 16:57:10,849 - INFO -   - Trends/ART_Mean
+2025-08-25 16:57:10,849 - INFO -   - Trends/HR_na
+2025-08-25 16:57:10,849 - INFO -   - Waveforms/ECG_II
+2025-08-25 16:57:10,849 - INFO -   - ... (and more)
+2025-08-25 16:57:10,849 - INFO - Converting all 15 dataset(s)...
+2025-08-25 16:57:10,857 - INFO - Converting dataset 1/15: Trends/ART_Dias
+2025-08-25 16:57:11,258 - INFO -   Successfully saved to: PatientData_1755638164371998322_Trends_ART_Dias.xpt
+2025-08-25 16:57:11,300 - INFO - Converting dataset 2/15: Trends/ART_Mean
+...
+2025-08-25 16:57:15,123 - INFO - Completed conversion of 15 dataset(s)
+2025-08-25 16:57:15,123 - INFO - All datasets converted successfully
+```
+
+To convert only a specific dataset, use the `-d` option:
+```bash
+python3 Converter.py PatientData_1755638164371998322.h5 -d "Trends/ART_Dias"
 ```
 
 ### Inspect H5 File Structure
@@ -152,8 +168,18 @@ python3 Converter.py . --batch -o ./output_folder
 | `-o` | `--output` | Specify output file or directory |
 | `-d` | `--dataset` | Specify dataset name to convert (for files with multiple datasets) |
 | `-i` | `--inspect` | Inspect H5 file structure only (no conversion) |
+| `-l` | `--list` | List all datasets in H5 file |
 | `-b` | `--batch` | Batch convert all H5 files in a directory |
 | | `--pattern` | File pattern for batch conversion (default: *.h5) |
+
+### Default Behavior (No Dataset Specified)
+
+**NEW:** When no dataset is specified with `-d`, the converter will:
+1. Automatically identify all datasets in the H5 file
+2. Convert each dataset to a separate output file
+3. Name output files with the dataset name appended (e.g., `output_Trends_HR_na.xpt`)
+
+This means you can now convert all datasets at once without specifying each one individually!
 
 ## Examples
 
@@ -171,8 +197,15 @@ ls -la PatientData_1755638164371998322.*
 # First, inspect to see available datasets
 python3 Converter.py PatientData_1755638164371998322.h5 --inspect
 
+# List all datasets (simpler output)
+python3 Converter.py PatientData_1755638164371998322.h5 --list
+
 # Convert a specific dataset (e.g., arterial pressure)
 python3 Converter.py PatientData_1755638164371998322.h5 -d "Trends/ART_Mean" -o arterial_mean.xpt
+
+# Convert ALL datasets automatically (NEW!)
+python3 Converter.py PatientData_1755638164371998322.h5
+# This will create multiple output files, one for each dataset
 ```
 
 ### Example 3: Complete Workflow
