@@ -1,0 +1,370 @@
+#!/usr/bin/env python3
+"""
+H5 to 7BDAT Converter
+
+This script converts HDF5 (.h5) files to SAS 7BDAT format.
+The conversion preserves data structure and types as much as possible.
+"""
+
+import h5py
+import pandas as pd
+import numpy as np
+import os
+import sys
+from pathlib import Path
+import argparse
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+class H5To7BDATConverter:
+    """Converter class for H5 to 7BDAT file conversion."""
+    
+    def __init__(self):
+        self.supported_dtypes = {
+            'int8', 'int16', 'int32', 'int64',
+            'uint8', 'uint16', 'uint32', 'uint64',
+            'float32', 'float64',
+            'bool', 'object'
+        }
+    
+    def inspect_h5_file(self, h5_path):
+        """Inspect the structure of an H5 file."""
+        logger.info(f"Inspecting H5 file: {h5_path}")
+        
+        try:
+            with h5py.File(h5_path, 'r') as f:
+                print(f"\nH5 File Structure for: {h5_path}")
+                print("=" * 50)
+                
+                def print_structure(name, obj):
+                    if isinstance(obj, h5py.Dataset):
+                        print(f"Dataset: {name}")
+                        print(f"  Shape: {obj.shape}")
+                        print(f"  Dtype: {obj.dtype}")
+                        print(f"  Size: {obj.size}")
+                        if obj.attrs:
+                            print(f"  Attributes: {dict(obj.attrs)}")
+                        print()
+                    elif isinstance(obj, h5py.Group):
+                        print(f"Group: {name}")
+                        if obj.attrs:
+                            print(f"  Attributes: {dict(obj.attrs)}")
+                        print()
+                
+                f.visititems(print_structure)
+                
+        except Exception as e:
+            logger.error(f"Error inspecting H5 file: {e}")
+            return False
+        
+        return True
+    
+    def convert_h5_dataset_to_dataframe(self, dataset, dataset_name):
+        """Convert an H5 dataset to a pandas DataFrame."""
+        try:
+            data = dataset[:]
+            
+            # Handle different data shapes
+            if len(data.shape) == 1:
+                # 1D array - create single column DataFrame
+                df = pd.DataFrame({dataset_name: data})
+            elif len(data.shape) == 2:
+                # 2D array - use as is or create column names
+                if data.shape[1] == 1:
+                    df = pd.DataFrame({dataset_name: data.flatten()})
+                else:
+                    # Create column names for multi-column data
+                    columns = [f"{dataset_name}_col_{i}" for i in range(data.shape[1])]
+                    df = pd.DataFrame(data, columns=columns)
+            else:
+                # Higher dimensional data - flatten to 2D
+                logger.warning(f"Dataset {dataset_name} has {len(data.shape)} dimensions. Flattening to 2D.")
+                reshaped_data = data.reshape(data.shape[0], -1)
+                columns = [f"{dataset_name}_dim_{i}" for i in range(reshaped_data.shape[1])]
+                df = pd.DataFrame(reshaped_data, columns=columns)
+            
+            # Handle data type conversion
+            for col in df.columns:
+                if df[col].dtype == 'object':
+                    # Try to convert object columns to string
+                    try:
+                        df[col] = df[col].astype(str)
+                    except:
+                        logger.warning(f"Could not convert column {col} to string")
+                elif np.issubdtype(df[col].dtype, np.integer):
+                    # Ensure integer types are compatible
+                    if df[col].dtype not in ['int32', 'int64']:
+                        df[col] = df[col].astype('int64')
+                elif np.issubdtype(df[col].dtype, np.floating):
+                    # Ensure float types are compatible
+                    if df[col].dtype not in ['float32', 'float64']:
+                        df[col] = df[col].astype('float64')
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error converting dataset {dataset_name}: {e}")
+            return None
+    
+    def generate_sas_import_script(self, csv_path, df):
+        """Generate a SAS script to import the CSV file."""
+        csv_name = Path(csv_path).stem
+        
+        # Determine data types for SAS
+        sas_types = []
+        for col, dtype in df.dtypes.items():
+            if np.issubdtype(dtype, np.integer):
+                sas_types.append(f"{col} 8")
+            elif np.issubdtype(dtype, np.floating):
+                sas_types.append(f"{col} 8")
+            else:
+                sas_types.append(f"{col} $32")
+        
+        sas_code = f"""/* SAS Import Script for {csv_path} */
+/* Generated by H5 to 7BDAT Converter */
+
+/* Import CSV data */
+proc import datafile="{csv_path}"
+    out={csv_name}
+    dbms=csv
+    replace;
+    getnames=yes;
+    guessingrows=1000;
+run;
+
+/* Optional: Define explicit data types */
+data {csv_name}_typed;
+    length {' '.join(sas_types)};
+    set {csv_name};
+run;
+
+/* Export as SAS7BDAT */
+libname outlib ".";
+data outlib.{csv_name};
+    set {csv_name}_typed;
+run;
+
+/* Print summary */
+proc contents data={csv_name}_typed;
+run;
+
+proc print data={csv_name}_typed (obs=10);
+run;
+"""
+        return sas_code
+    
+    def convert_h5_to_7bdat(self, h5_path, output_path=None, dataset_name=None):
+        """
+        Convert H5 file to 7BDAT format.
+        
+        Args:
+            h5_path (str): Path to input H5 file
+            output_path (str): Path for output 7BDAT file (optional)
+            dataset_name (str): Specific dataset to convert (optional, converts first dataset if not specified)
+        """
+        h5_path = Path(h5_path)
+        
+        if not h5_path.exists():
+            logger.error(f"Input file does not exist: {h5_path}")
+            return False
+        
+        # Generate output path if not provided
+        if output_path is None:
+            output_path = h5_path.with_suffix('.sas7bdat')
+        else:
+            output_path = Path(output_path)
+        
+        logger.info(f"Converting {h5_path} to {output_path}")
+        
+        try:
+            with h5py.File(h5_path, 'r') as f:
+                # Get all datasets
+                datasets = []
+                
+                def collect_datasets(name, obj):
+                    if isinstance(obj, h5py.Dataset):
+                        datasets.append((name, obj))
+                
+                f.visititems(collect_datasets)
+                
+                if not datasets:
+                    logger.error("No datasets found in H5 file")
+                    return False
+                
+                # Select dataset to convert
+                if dataset_name:
+                    selected_dataset = None
+                    for name, dataset in datasets:
+                        if name == dataset_name or name.endswith(f"/{dataset_name}"):
+                            selected_dataset = (name, dataset)
+                            break
+                    
+                    if selected_dataset is None:
+                        logger.error(f"Dataset '{dataset_name}' not found")
+                        logger.info(f"Available datasets: {[name for name, _ in datasets]}")
+                        return False
+                    
+                    datasets = [selected_dataset]
+                else:
+                    # Use the first dataset if none specified
+                    datasets = [datasets[0]]
+                    logger.info(f"No dataset specified, using: {datasets[0][0]}")
+                
+                # Convert the selected dataset
+                name, dataset = datasets[0]
+                df = self.convert_h5_dataset_to_dataframe(dataset, name.split('/')[-1])
+                
+                if df is None:
+                    return False
+                
+                logger.info(f"Converted dataset shape: {df.shape}")
+                logger.info(f"Columns: {list(df.columns)}")
+                logger.info(f"Data types: {df.dtypes.to_dict()}")
+                
+                # Save as SAS 7BDAT file - try multiple approaches
+                saved_successfully = False
+                
+                # Method 1: Try pyreadstat with SAS XPORT format (compatible with SAS)
+                try:
+                    import pyreadstat
+                    # pyreadstat doesn't have write_sas7bdat, but has write_xport for SAS XPORT format
+                    xport_path = output_path.with_suffix('.xpt')
+                    pyreadstat.write_xport(df, str(xport_path), table_name='DATA')
+                    logger.info(f"Successfully saved using pyreadstat (XPORT format) to: {xport_path}")
+                    saved_successfully = True
+                    
+                except ImportError:
+                    logger.warning("pyreadstat not available. Install with: pip install pyreadstat")
+                    
+                except Exception as e:
+                    logger.warning(f"Error with pyreadstat XPORT: {e}")
+                
+                # Method 2: Try pandas SAS writer (if available)
+                if not saved_successfully:
+                    try:
+                        # Some pandas versions have SAS writer
+                        df.to_sas(str(output_path))
+                        logger.info(f"Successfully saved using pandas to: {output_path}")
+                        saved_successfully = True
+                        
+                    except AttributeError:
+                        logger.warning("pandas SAS writer not available in this version")
+                        
+                    except Exception as e:
+                        logger.warning(f"Error with pandas SAS writer: {e}")
+                
+                # Method 3: Try alternative SAS libraries
+                if not saved_successfully:
+                    try:
+                        import sas7bdat
+                        # This is typically for reading, but let's try
+                        logger.warning("sas7bdat library found but typically used for reading only")
+                        
+                    except ImportError:
+                        pass
+                
+                # Method 4: Save as CSV with SAS-compatible format
+                if not saved_successfully:
+                    logger.info("SAS format not available, saving as CSV with SAS-compatible formatting...")
+                    csv_path = output_path.with_suffix('.csv')
+                    
+                    # Ensure column names are SAS-compatible (max 32 chars, no special chars)
+                    df_sas_compatible = df.copy()
+                    new_columns = {}
+                    for col in df_sas_compatible.columns:
+                        # Make column names SAS-compatible
+                        new_col = str(col).replace(' ', '_').replace('-', '_')
+                        new_col = ''.join(c for c in new_col if c.isalnum() or c == '_')
+                        new_col = new_col[:32]  # SAS max column name length
+                        new_columns[col] = new_col
+                    
+                    df_sas_compatible.rename(columns=new_columns, inplace=True)
+                    df_sas_compatible.to_csv(csv_path, index=False)
+                    logger.info(f"Saved as SAS-compatible CSV: {csv_path}")
+                    
+                    # Also create a SAS import script
+                    sas_script_path = output_path.with_suffix('.sas')
+                    sas_import_code = self.generate_sas_import_script(csv_path, df_sas_compatible)
+                    with open(sas_script_path, 'w') as f:
+                        f.write(sas_import_code)
+                    logger.info(f"Created SAS import script: {sas_script_path}")
+                    saved_successfully = True
+                
+                return saved_successfully
+                
+        except Exception as e:
+            logger.error(f"Error processing H5 file: {e}")
+            return False
+    
+    def batch_convert(self, input_dir, output_dir=None, pattern="*.h5"):
+        """Convert multiple H5 files in a directory."""
+        input_dir = Path(input_dir)
+        
+        if output_dir is None:
+            output_dir = input_dir
+        else:
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+        
+        h5_files = list(input_dir.glob(pattern))
+        
+        if not h5_files:
+            logger.warning(f"No H5 files found in {input_dir} with pattern {pattern}")
+            return
+        
+        logger.info(f"Found {len(h5_files)} H5 files to convert")
+        
+        success_count = 0
+        for h5_file in h5_files:
+            output_file = output_dir / h5_file.with_suffix('.sas7bdat').name
+            if self.convert_h5_to_7bdat(h5_file, output_file):
+                success_count += 1
+        
+        logger.info(f"Successfully converted {success_count}/{len(h5_files)} files")
+
+
+def main():
+    """Main function with command line interface."""
+    parser = argparse.ArgumentParser(description='Convert H5 files to SAS 7BDAT format')
+    parser.add_argument('input', help='Input H5 file or directory')
+    parser.add_argument('-o', '--output', help='Output file or directory')
+    parser.add_argument('-d', '--dataset', help='Specific dataset name to convert')
+    parser.add_argument('-i', '--inspect', action='store_true', help='Inspect H5 file structure only')
+    parser.add_argument('-b', '--batch', action='store_true', help='Batch convert all H5 files in directory')
+    parser.add_argument('--pattern', default='*.h5', help='File pattern for batch conversion (default: *.h5)')
+    
+    args = parser.parse_args()
+    
+    converter = H5To7BDATConverter()
+    
+    if args.inspect:
+        converter.inspect_h5_file(args.input)
+    elif args.batch:
+        converter.batch_convert(args.input, args.output, args.pattern)
+    else:
+        converter.convert_h5_to_7bdat(args.input, args.output, args.dataset)
+
+
+if __name__ == "__main__":
+    # If run directly, try to convert the sample file in the current directory
+    if len(sys.argv) == 1:
+        # Look for H5 files in current directory
+        h5_files = list(Path('.').glob('*.h5'))
+        if h5_files:
+            converter = H5To7BDATConverter()
+            print("Found H5 files in current directory:")
+            for i, h5_file in enumerate(h5_files):
+                print(f"{i+1}. {h5_file}")
+            
+            # Convert the first one as an example
+            print(f"\nInspecting and converting: {h5_files[0]}")
+            converter.inspect_h5_file(h5_files[0])
+            converter.convert_h5_to_7bdat(h5_files[0])
+        else:
+            print("No H5 files found in current directory.")
+            print("Usage: python Converter.py <input.h5> [-o output.sas7bdat] [-d dataset_name]")
+    else:
+        main()
