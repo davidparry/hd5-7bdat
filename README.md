@@ -16,6 +16,8 @@ This tool converts HDF5 (.h5) files to SAS-compatible formats, preserving data s
 
 ## Quick Start
 
+### For macOS/Linux Users
+
 ```bash
 # Clone or navigate to the project directory
 cd /Users/davidparry/code/github/hd5-7bdat
@@ -26,6 +28,62 @@ source .venv/bin/activate
 pip install -r requirements.txt
 python3 Converter.py PatientData_1755638164371998322.h5
 ```
+
+### For Windows Users (Using Git Bash)
+
+Git Bash provides a Unix-like command line environment on Windows. Follow these steps:
+
+#### Step 1: Open Git Bash
+- Right-click in your project folder
+- Select "Git Bash Here" from the context menu
+- Or open Git Bash and navigate to your project directory
+
+#### Step 2: Setup and Run
+```bash
+# Navigate to the project directory (adjust path as needed)
+cd /c/Users/YourUsername/path/to/hd5-7bdat
+
+# Create virtual environment (Windows may use 'python' instead of 'python3')
+python -m venv venv
+
+# Activate virtual environment in Git Bash
+source venv/Scripts/activate
+
+# Install required packages
+pip install -r requirements.txt
+
+# Run the converter
+python Converter.py PatientData_1755638164371998322.h5
+```
+
+**Windows-Specific Notes:**
+- Use forward slashes `/` in Git Bash (e.g., `/c/Users/` instead of `C:\Users\`)
+- Python command might be `python` instead of `python3`
+- Virtual environment activation script is in `.venv/Scripts/` not `.venv/bin/`
+- If you encounter permission issues, run Git Bash as Administrator
+
+#### Alternative: Windows Command Prompt or PowerShell
+If you prefer using native Windows terminals:
+
+**Command Prompt:**
+```cmd
+cd C:\Users\YourUsername\path\to\hd5-7bdat
+python -m venv .venv
+.venv\Scripts\activate.bat
+pip install -r requirements.txt
+python Converter.py PatientData_1755638164371998322.h5
+```
+
+**PowerShell:**
+```powershell
+cd C:\Users\YourUsername\path\to\hd5-7bdat
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python Converter.py PatientData_1755638164371998322.h5
+```
+
+*Note: If PowerShell blocks script execution, run: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`*
 
 Your converted file will be saved as `PatientData_1755638164371998322.xpt` (SAS XPORT format).
 
@@ -76,10 +134,12 @@ The test file contains the same structure as the full patient data but with mini
 
 ### Setup Steps
 
+#### macOS/Linux
+
 1. **Create and activate a virtual environment:**
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
 ```
 
 2. **Install required packages:**
@@ -91,6 +151,31 @@ pip install -r requirements.txt
 ```bash
 python3 -c "import h5py, pandas, numpy, pyreadstat; print('✓ All packages installed successfully')"
 ```
+
+#### Windows (Git Bash)
+
+1. **Create and activate a virtual environment:**
+```bash
+# In Git Bash
+python -m venv .venv
+source .venv/Scripts/activate
+```
+
+2. **Install required packages:**
+```bash
+pip install -r requirements.txt
+```
+
+3. **Verify installation:**
+```bash
+python -c "import h5py, pandas, numpy, pyreadstat; print('✓ All packages installed successfully')"
+```
+
+**Troubleshooting Windows Setup:**
+- If `python` doesn't work, try `python3` or check if Python is in your PATH
+- If activation fails in Git Bash, try: `source .venv/Scripts/activate`
+- For Command Prompt use: `.venv\Scripts\activate.bat`
+- For PowerShell use: `.venv\Scripts\Activate.ps1`
 
 If you see the success message, you're ready to convert files!
 
@@ -209,6 +294,8 @@ python3 Converter.py PatientData_1755638164371998322.h5
 ```
 
 ### Example 3: Complete Workflow
+
+**macOS/Linux:**
 ```bash
 # 1. Setup environment (first time only)
 python3 -m venv .venv
@@ -223,6 +310,26 @@ python3 Converter.py PatientData_1755638164371998322.h5 --inspect
 
 # 4. Convert to SAS XPORT format
 python3 Converter.py PatientData_1755638164371998322.h5
+
+# 5. Verify output was created
+ls -la *.xpt *.csv *.sas
+```
+
+**Windows (Git Bash):**
+```bash
+# 1. Setup environment (first time only)
+python -m venv .venv
+source .venv/Scripts/activate
+pip install -r requirements.txt
+
+# 2. Verify installation
+python -c "import h5py, pandas, numpy, pyreadstat; print('✓ Ready to convert')"
+
+# 3. Inspect the H5 file structure
+python Converter.py PatientData_1755638164371998322.h5 --inspect
+
+# 4. Convert to SAS XPORT format
+python Converter.py PatientData_1755638164371998322.h5
 
 # 5. Verify output was created
 ls -la *.xpt *.csv *.sas
@@ -246,6 +353,7 @@ The converter attempts multiple output formats in order of preference:
 - **Format:** SAS Transport (XPORT) format
 - **Compatibility:** Can be read by SAS, R, Python, and other statistical software
 - **When used:** When pyreadstat is installed (recommended)
+- **SAS Import Script:** Automatically generated `.sas` file with correct import syntax
 
 ### Fallback: CSV with SAS Import Script
 - **Extensions:** `.csv` + `.sas`
@@ -256,6 +364,63 @@ The converter attempts multiple output formats in order of preference:
   - `filename.sas` - SAS script to import the CSV into SAS
 
 **Note:** The tool does not directly create `.sas7bdat` files, but the XPORT format (`.xpt`) is fully compatible with SAS and can be imported directly.
+
+## Importing Files into SAS
+
+### For XPORT Files (.xpt)
+
+The converter creates a `.sas` script alongside each `.xpt` file with the correct import code. Here's how to use it:
+
+1. **Open SAS** and navigate to your working directory
+2. **Run the generated .sas script** or use this code:
+
+```sas
+/* Define XPORT library */
+libname myxpt xport "your_file.xpt";
+
+/* Copy to work library */
+proc copy in=myxpt out=work;
+run;
+
+/* View the data */
+proc print data=work.data (obs=10);
+run;
+
+/* Save as permanent SAS dataset */
+libname perm ".";
+data perm.your_dataset;
+    set work.data;
+run;
+
+/* Clear XPORT library */
+libname myxpt clear;
+```
+
+**Important:** XPORT files use a special library engine. Don't try to access them directly as SAS datasets.
+
+### For CSV Files
+
+If the converter created CSV files, use the accompanying `.sas` script or:
+
+```sas
+proc import datafile="your_file.csv"
+    out=your_dataset
+    dbms=csv
+    replace;
+    getnames=yes;
+run;
+```
+
+### Common SAS Import Errors
+
+**Error:** `File MYXPT.ALL. is not a SAS data set`
+- **Cause:** Trying to use PROC COPY incorrectly with XPORT files
+- **Solution:** Use the LIBNAME XPORT method shown above
+
+**Error:** `Physical file does not exist`
+- **Solution:** Check file path or copy files to SAS working directory
+
+See `example_import_xport.sas` for a complete guide to importing XPORT files in SAS.
 
 ## Data Type Handling
 
@@ -276,16 +441,55 @@ The converter automatically handles various data types:
 **Problem:** `ModuleNotFoundError: No module named 'h5py'`
 ```bash
 # Solution: Ensure virtual environment is activated
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+# Windows Git Bash:
+source .venv/Scripts/activate
+# Windows Command Prompt:
+.venv\Scripts\activate.bat
+
 pip install -r requirements.txt
 ```
 
 **Problem:** `error: externally-managed-environment`
 ```bash
 # Solution: Use virtual environment (already included in setup steps)
+# macOS/Linux:
 python3 -m venv .venv
 source .venv/bin/activate
+# Windows:
+python -m venv .venv
+source .venv/Scripts/activate  # Git Bash
 pip install -r requirements.txt
+```
+
+**Windows-Specific Problems:**
+
+**Problem:** `'python' is not recognized as an internal or external command`
+```bash
+# Solution 1: Use 'python3' instead
+python3 --version
+
+# Solution 2: Add Python to PATH during installation
+# Reinstall Python and check "Add Python to PATH"
+
+# Solution 3: Use full path to Python
+/c/Users/YourUsername/AppData/Local/Programs/Python/Python39/python.exe --version
+```
+
+**Problem:** `cannot be loaded because running scripts is disabled on this system` (PowerShell)
+```powershell
+# Solution: Enable script execution for current user
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+# Then retry activation
+.venv\Scripts\Activate.ps1
+```
+
+**Problem:** Git Bash shows `/c/Users/...` paths but Python expects `C:\Users\...`
+```bash
+# Solution: Git Bash automatically handles path conversion
+# Use forward slashes in Git Bash, they'll be converted as needed
+cd /c/Users/YourUsername/Documents/hd5-7bdat
 ```
 
 ### Conversion Issues
@@ -312,7 +516,10 @@ python3 Converter.py PatientData_1755638164371998322.h5 -d "Trends/ART_Dias"
 
 1. **Virtual environment not activated:**
    - Symptom: Import errors or wrong Python version
-   - Fix: Always run `source .venv/bin/activate` before using the converter
+   - Fix macOS/Linux: Always run `source .venv/bin/activate` before using the converter
+   - Fix Windows Git Bash: Run `source .venv/Scripts/activate`
+   - Fix Windows CMD: Run `.venv\Scripts\activate.bat`
+   - Fix Windows PowerShell: Run `.venv\Scripts\Activate.ps1`
 
 2. **Column names modified:**
    - Symptom: Column names differ from original
