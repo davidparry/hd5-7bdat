@@ -199,12 +199,17 @@ python3 Converter.py PatientData_1755638164371998322.h5
 2025-08-25 16:57:10,849 - INFO -   - ... (and more)
 2025-08-25 16:57:10,849 - INFO - Converting all 15 dataset(s)...
 2025-08-25 16:57:10,857 - INFO - Converting dataset 1/15: Trends/ART_Dias
-2025-08-25 16:57:11,258 - INFO -   Successfully saved to: PatientData_1755638164371998322_Trends_ART_Dias.xpt
+2025-08-25 16:57:10,900 - INFO -   Saving as CSV with SAS-compatible formatting (recommended for SAS 9.4)...
+2025-08-25 16:57:11,100 - INFO -   ✓ Saved as SAS-compatible CSV: PatientData_1755638164371998322_Trends_ART_Dias.csv
+2025-08-25 16:57:11,150 - INFO -   ✓ Created SAS import script: PatientData_1755638164371998322_Trends_ART_Dias.sas
+2025-08-25 16:57:11,258 - INFO -   ✓ Also saved as XPORT format: PatientData_1755638164371998322_Trends_ART_Dias.xpt
 2025-08-25 16:57:11,300 - INFO - Converting dataset 2/15: Trends/ART_Mean
 ...
 2025-08-25 16:57:15,123 - INFO - Completed conversion of 15 dataset(s)
 2025-08-25 16:57:15,123 - INFO - All datasets converted successfully
 ```
+
+**Note:** The converter now creates CSV files as the primary output (recommended for SAS 9.4) and XPORT files as secondary output when possible.
 
 To convert only a specific dataset, use the `-d` option:
 ```bash
@@ -346,33 +351,56 @@ python3 Converter.py . --batch --pattern "Patient*.h5"
 
 ## Output Formats
 
-The converter attempts multiple output formats in order of preference:
+The converter creates multiple output formats for maximum compatibility:
 
-### Primary: SAS XPORT (.xpt)
-- **Extension:** `.xpt`
-- **Format:** SAS Transport (XPORT) format
-- **Compatibility:** Can be read by SAS, R, Python, and other statistical software
-- **When used:** When pyreadstat is installed (recommended)
-- **SAS Import Script:** Automatically generated `.sas` file with correct import syntax
-
-### Fallback: CSV with SAS Import Script
+### Primary: CSV with SAS Import Script (RECOMMENDED for SAS 9.4)
 - **Extensions:** `.csv` + `.sas`
 - **Format:** Comma-separated values with accompanying SAS import code
-- **When used:** If XPORT conversion fails or pyreadstat is not available
+- **Compatibility:** Works reliably with all SAS versions, especially SAS 9.4
 - **Files created:**
   - `filename.csv` - Data in CSV format with SAS-compatible column names
   - `filename.sas` - SAS script to import the CSV into SAS
+- **Why recommended:** Most reliable method for SAS 9.4, no compatibility issues
 
-**Note:** The tool does not directly create `.sas7bdat` files, but the XPORT format (`.xpt`) is fully compatible with SAS and can be imported directly.
+### Secondary: SAS XPORT (.xpt)
+- **Extension:** `.xpt`
+- **Format:** SAS Transport (XPORT) format
+- **Compatibility:** Can be read by SAS, R, Python, and other statistical software
+- **When created:** When pyreadstat is installed
+- **SAS Import Script:** Automatically generated `.sas` file with import syntax
+- **Note:** Some SAS 9.4 installations may have issues with Python-generated XPORT files
+
+**Important:** The converter now prioritizes CSV format for better SAS 9.4 compatibility. Both formats are created when possible, allowing you to use whichever works best with your SAS installation.
 
 ## Importing Files into SAS
 
-### For XPORT Files (.xpt)
+### Recommended Method: CSV Files (Best for SAS 9.4)
 
-The converter creates a `.sas` script alongside each `.xpt` file with the correct import code. Here's how to use it:
+The converter creates a `.sas` script alongside each `.csv` file. This is the **most reliable method for SAS 9.4**:
 
 1. **Open SAS** and navigate to your working directory
-2. **Run the generated .sas script** or use this code:
+2. **Run the generated .sas script** or use this simple code:
+
+```sas
+/* Import CSV file - Works reliably with SAS 9.4 */
+proc import datafile="your_file.csv"
+    out=work.your_dataset
+    dbms=csv
+    replace;
+    getnames=yes;
+    guessingrows=MAX;
+run;
+
+/* Save as permanent SAS dataset */
+libname perm ".";
+data perm.your_dataset;
+    set work.your_dataset;
+run;
+```
+
+### Alternative Method: XPORT Files (.xpt)
+
+If you prefer to use XPORT files (may have compatibility issues with SAS 9.4):
 
 ```sas
 /* Define XPORT library */
@@ -383,44 +411,28 @@ proc copy in=myxpt out=work;
 run;
 
 /* View the data */
-proc print data=work.data (obs=10);
-run;
-
-/* Save as permanent SAS dataset */
-libname perm ".";
-data perm.your_dataset;
-    set work.data;
+proc print data=work._first_ (obs=10);
 run;
 
 /* Clear XPORT library */
 libname myxpt clear;
 ```
 
-**Important:** XPORT files use a special library engine. Don't try to access them directly as SAS datasets.
+### Common SAS Import Errors and Solutions
 
-### For CSV Files
-
-If the converter created CSV files, use the accompanying `.sas` script or:
-
-```sas
-proc import datafile="your_file.csv"
-    out=your_dataset
-    dbms=csv
-    replace;
-    getnames=yes;
-run;
-```
-
-### Common SAS Import Errors
-
-**Error:** `File MYXPT.ALL. is not a SAS data set`
-- **Cause:** Trying to use PROC COPY incorrectly with XPORT files
-- **Solution:** Use the LIBNAME XPORT method shown above
+**Error with XPORT:** `File MYXPT.ALL. is not a SAS data set` or other XPORT errors
+- **Solution:** Use the CSV file instead - it's more reliable for SAS 9.4
+- Run the `.sas` script that was created alongside the `.csv` file
 
 **Error:** `Physical file does not exist`
 - **Solution:** Check file path or copy files to SAS working directory
 
-See `example_import_xport.sas` for a complete guide to importing XPORT files in SAS.
+**Best Practice for SAS 9.4:**
+1. Use the CSV files and their accompanying SAS scripts
+2. The converter creates both CSV and XPORT (when possible) - use CSV for reliability
+3. All column names are automatically made SAS-compatible
+
+See `example_import_xport.sas` for additional import methods and troubleshooting.
 
 ## Data Type Handling
 
